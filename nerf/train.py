@@ -1,10 +1,11 @@
+import os
 import jax
 import optax
 from jax import lax
 import jax.numpy as jnp
 
 from flax import jax_utils
-from flax.training import train_state, common_utils
+from flax.training import train_state, common_utils, checkpoints
 
 import numpy as np
 from tqdm import tqdm
@@ -104,8 +105,17 @@ class NeRFSystem:
             self.image_height, self.image_width, self.focal, test_pose
         )
 
-    def train(self, train_images, test_image, num_iterations: int, plot_interval: int):
-        for step in tqdm(range(num_iterations + 1)):
+    def train(
+        self,
+        train_images,
+        test_image,
+        num_iterations: int = 1000,
+        plot_interval: int = 100,
+        checkpoint_dir: str = "./checkpoints/train",
+    ):
+        if not os.path.isdir(checkpoint_dir):
+            os.mkdir(checkpoint_dir)
+        for step in tqdm(range(1, num_iterations + 1)):
             rng_idx, rng_step = jax.random.split(
                 jax.random.fold_in(self.random_number_generator, step)
             )
@@ -124,7 +134,33 @@ class NeRFSystem:
                 )
                 self.psnr_history.append(np.asarray(psnr))
                 plot_results([rgb, depth_map], ["RGB Image", "Depth Map"])
+                checkpoints.save_checkpoint(
+                    checkpoint_dir, self.state, step, prefix="train_", overwrite=True
+                )
         self.inference_state = jax_utils.unreplicate(self.state)
+
+    def load_train_checkpoint(self, checkpoint_dir: str = "./checkpoints/train"):
+        ret = checkpoints.restore_checkpoint(checkpoint_dir, self.state)
+        if ret is None:
+            print("Unable to load checkpoints")
+        else:
+            print("Loaded checkpoints successfully")
+
+    def save(self, checkpoint_dir: str = "./checkpoints/inference", version: int = 1):
+        checkpoints.save_checkpoint(
+            checkpoint_dir,
+            self.inference_state,
+            version,
+            prefix="inference_",
+            overwrite=True,
+        )
+
+    def load(self, checkpoint_dir: str = "./checkpoints/inference"):
+        ret = checkpoints.restore_checkpoint(checkpoint_dir, self.inference_state)
+        if ret is None:
+            print("Unable to load checkpoints")
+        else:
+            print("Loaded checkpoints successfully")
 
     def render_video(self, frame_rate: int = 30, quality: int = 7):
         def pose_spherical(theta, phi, radius):
@@ -132,14 +168,12 @@ class NeRFSystem:
             pose = self.rotation_phi(phi / 180.0 * np.pi) @ pose
             pose = self.rotation_theta(theta / 180.0 * np.pi) @ pose
             return (
-                np.array(
-                    [
-                        [-1, 0, 0, 0],
-                        [0, 0, 1, 0],
-                        [0, 1, 0, 0],
-                        [0, 0, 0, 1]
-                    ]
-                ) @ pose
+                np.array([
+                    [-1, 0, 0, 0],
+                    [0, 0, 1, 0],
+                    [0, 1, 0, 0],
+                    [0, 0, 0, 1]
+                ]) @ pose
             )
 
         @jax.jit
