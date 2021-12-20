@@ -1,4 +1,8 @@
 flax==0.3.6
+imageio==2.13.3
 jax==0.2.26
 jaxlib==0.1.75
 matplotlib==3.5.1
+ml-collections==0.1.0
+tqdm==4.62.3
+wget==3.2
