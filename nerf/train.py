@@ -28,14 +28,14 @@ class NeRFSystem:
             {"params": self.key},
             jnp.ones((image_height * image_width, 3)),
         )["params"]
-    
+
     @staticmethod
     def train_step(state, batch, random_number_generator):
         inputs, targets = batch
 
         def loss_fn(params):
             model_fn = lambda x: state.apply_fn({"params": params}, x)
-            rgb, _, _ = render_rays(
+            rgb, _ = render_rays(
                 model_fn, inputs, random_number_generator=random_number_generator
             )
             return jnp.mean((rgb - targets) ** 2)
@@ -44,15 +44,15 @@ class NeRFSystem:
         grads = lax.pmean(grads, axis_name="batch")
         new_state = state.apply_gradients(grads=grads)
         return new_state
-    
+
     @staticmethod
     @jax.jit
     def evaluate(state, test_image, test_rays):
         model_fn = lambda x: state.apply_fn({"params": state.params}, x)
-        rgb, *_ = render_rays(model_fn, test_rays)
+        rgb, depth_map = render_rays(model_fn, test_rays)
         loss = jnp.mean((rgb - test_image) ** 2)
         psnr = -10.0 * jnp.log(loss) / jnp.log(10.0)
-        return rgb, psnr
+        return rgb, depth_map, psnr
 
     def compile(self, learning_rate: float, train_poses, test_pose):
         self.psnr_history = []
@@ -92,11 +92,14 @@ class NeRFSystem:
             )
             if step % plot_interval == 0:
                 evaluation_state = jax_utils.unreplicate(self.state)
-                rgb, psnr = self.evaluate(evaluation_state, test_image, self.test_rays)
+                rgb, depth_map, acc_map, psnr = self.evaluate(
+                    evaluation_state, test_image, self.test_rays
+                )
                 self.psnr_history.append(np.asarray(psnr))
-                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-                ax1.imshow(rgb)
-                ax1.axis("off")
-                ax2.plot(np.arange(0, step + 1, plot_interval), self.psnr_history)
+                fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+                axes[0].imshow(rgb)
+                axes[0].axis("off")
+                axes[1].imshow(depth_map)
+                axes[1].axis("off")
                 plt.show()
         self.state = jax_utils.unreplicate(self.state)

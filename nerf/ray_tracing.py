@@ -52,5 +52,4 @@ def render_rays(
     weights = alpha * jnp.cumprod(trans, -1)
     rgb_map = jnp.einsum("...k,...kl", weights, rgb)
     depth_map = jnp.einsum("...k,...k", weights, z_vals)
-    acc_map = jnp.einsum("...k->...", weights)
-    return rgb_map, depth_map, acc_map
+    return rgb_map, depth_map
