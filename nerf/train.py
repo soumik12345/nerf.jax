@@ -8,10 +8,10 @@ from flax.training import train_state, common_utils
 
 import numpy as np
 from tqdm import tqdm
-import matplotlib.pyplot as plt
+from imageio import mimwrite
 
 from .model import NeRF
-from .utils import init_tpu
+from .utils import init_tpu, plot_results
 from .ray_tracing import generate_rays, render_rays
 
 
@@ -28,6 +28,33 @@ class NeRFSystem:
             {"params": self.key},
             jnp.ones((image_height * image_width, 3)),
         )["params"]
+        self.define_matrices()
+
+    def define_matrices(self):
+        self.translation = lambda t: np.asarray(
+            [
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
+                [0, 0, 1, t],
+                [0, 0, 0, 1],
+            ]
+        )
+        self.rotation_phi = lambda phi: np.asarray(
+            [
+                [1, 0, 0, 0],
+                [0, np.cos(phi), -np.sin(phi), 0],
+                [0, np.sin(phi), np.cos(phi), 0],
+                [0, 0, 0, 1],
+            ]
+        )
+        self.rotation_theta = lambda th: np.asarray(
+            [
+                [np.cos(th), 0, -np.sin(th), 0],
+                [0, 1, 0, 0],
+                [np.sin(th), 0, np.cos(th), 0],
+                [0, 0, 0, 1],
+            ]
+        )
 
     @staticmethod
     def train_step(state, batch, random_number_generator):
@@ -92,14 +119,52 @@ class NeRFSystem:
             )
             if step % plot_interval == 0:
                 evaluation_state = jax_utils.unreplicate(self.state)
-                rgb, depth_map, acc_map, psnr = self.evaluate(
+                rgb, depth_map, psnr = self.evaluate(
                     evaluation_state, test_image, self.test_rays
                 )
                 self.psnr_history.append(np.asarray(psnr))
-                fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-                axes[0].imshow(rgb)
-                axes[0].axis("off")
-                axes[1].imshow(depth_map)
-                axes[1].axis("off")
-                plt.show()
-        self.state = jax_utils.unreplicate(self.state)
+                plot_results([rgb, depth_map], ["RGB Image", "Depth Map"])
+        self.inference_state = jax_utils.unreplicate(self.state)
+
+    def render_video(self, frame_rate: int = 30, quality: int = 7):
+        def pose_spherical(theta, phi, radius):
+            pose = self.translation(radius)
+            pose = self.rotation_phi(phi / 180.0 * np.pi) @ pose
+            pose = self.rotation_theta(theta / 180.0 * np.pi) @ pose
+            return (
+                np.array(
+                    [
+                        [-1, 0, 0, 0],
+                        [0, 0, 1, 0],
+                        [0, 1, 0, 0],
+                        [0, 0, 0, 1]
+                    ]
+                ) @ pose
+            )
+
+        @jax.jit
+        def get_frames(rays):
+            model_fn = lambda x: self.inference_state.apply_fn(
+                {"params": self.inference_state.params}, x
+            )
+            rgb_image, depth_map = render_rays(model_fn, rays)
+            rgb_image = (255 * jnp.clip(rgb_image, 0, 1)).astype(jnp.uint8)
+            return rgb_image, depth_map
+
+        video_angle = jnp.linspace(0.0, 360.0, 120, endpoint=False)
+        video_pose = map(lambda th: pose_spherical(th, -30.0, 4.0), video_angle)
+        rays = np.stack(
+            list(
+                map(
+                    lambda x: generate_rays(
+                        self.image_height, self.image_width, self.focal, x[:3, :4]
+                    ),
+                    video_pose,
+                )
+            )
+        )
+        rgb_frames, depth_maps = lax.map(get_frames, rays)
+        rgb_frames = map(np.asarray, rgb_frames)
+        depth_maps = map(np.asarray, depth_maps)
+        mimwrite("rgb.mp4", tuple(rgb_frames), fps=frame_rate, quality=quality)
+        mimwrite("depth.mp4", tuple(depth_maps), fps=frame_rate, quality=quality)
