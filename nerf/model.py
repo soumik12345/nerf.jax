@@ -26,7 +26,7 @@ class NeRF(nn.module.Module):
         functions = functions.swapaxes(0, 2).reshape([batch_size, -1])
         functions = jnp.concatenate([inputs, functions], axis=-1)
         return functions
-    
+
     @nn.compact
     def __call__(self, inputs_points):
         x = self.embed(inputs_points) if self.use_embedding else inputs_points
