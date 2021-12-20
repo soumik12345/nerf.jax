@@ -15,31 +15,6 @@ from .utils import init_tpu
 from .ray_tracing import generate_rays, render_rays
 
 
-def train_step(state, batch, random_number_generator):
-    inputs, targets = batch
-
-    def loss_fn(params):
-        model_fn = lambda x: state.apply_fn({"params": params}, x)
-        rgb, _, _ = render_rays(
-            model_fn, inputs, random_number_generator=random_number_generator
-        )
-        return jnp.mean((rgb - targets) ** 2)
-
-    grads = jax.grad(loss_fn)(state.params)
-    grads = lax.pmean(grads, axis_name="batch")
-    new_state = state.apply_gradients(grads=grads)
-    return new_state
-
-
-@jax.jit
-def evaluate(state, test_image, test_rays):
-    model_fn = lambda x: state.apply_fn({"params": state.params}, x)
-    rgb, *_ = render_rays(model_fn, test_rays)
-    loss = jnp.mean((rgb - test_image) ** 2)
-    psnr = -10.0 * jnp.log(loss) / jnp.log(10.0)
-    return rgb, psnr
-
-
 class NeRFSystem:
     def __init__(self, image_height: int, image_width: int, focal: float) -> None:
         init_tpu()
@@ -53,16 +28,41 @@ class NeRFSystem:
             {"params": self.key},
             jnp.ones((image_height * image_width, 3)),
         )["params"]
+    
+    @staticmethod
+    def train_step(state, batch, random_number_generator):
+        inputs, targets = batch
+
+        def loss_fn(params):
+            model_fn = lambda x: state.apply_fn({"params": params}, x)
+            rgb, _, _ = render_rays(
+                model_fn, inputs, random_number_generator=random_number_generator
+            )
+            return jnp.mean((rgb - targets) ** 2)
+
+        grads = jax.grad(loss_fn)(state.params)
+        grads = lax.pmean(grads, axis_name="batch")
+        new_state = state.apply_gradients(grads=grads)
+        return new_state
+    
+    @staticmethod
+    @jax.jit
+    def evaluate(state, test_image, test_rays):
+        model_fn = lambda x: state.apply_fn({"params": state.params}, x)
+        rgb, *_ = render_rays(model_fn, test_rays)
+        loss = jnp.mean((rgb - test_image) ** 2)
+        psnr = -10.0 * jnp.log(loss) / jnp.log(10.0)
+        return rgb, psnr
 
     def compile(self, learning_rate: float, train_poses, test_pose):
         self.psnr_history = []
         self.state = train_state.TrainState.create(
             apply_fn=self.model.apply,
             params=self.parameters,
-            tx=optax.adam(learning_rate=5e-4),
+            tx=optax.adam(learning_rate=learning_rate),
         )
         self.state = jax.device_put_replicated(self.state, jax.local_devices())
-        self.parallel_train_step = jax.pmap(train_step, axis_name="batch")
+        self.parallel_train_step = jax.pmap(self.train_step, axis_name="batch")
         self.train_rays = np.stack(
             list(
                 map(
@@ -92,7 +92,7 @@ class NeRFSystem:
             )
             if step % plot_interval == 0:
                 evaluation_state = jax_utils.unreplicate(self.state)
-                rgb, psnr = evaluate(evaluation_state, test_image, self.test_rays)
+                rgb, psnr = self.evaluate(evaluation_state, test_image, self.test_rays)
                 self.psnr_history.append(np.asarray(psnr))
                 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
                 ax1.imshow(rgb)
