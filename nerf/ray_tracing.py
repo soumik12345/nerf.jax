@@ -22,7 +22,7 @@ def render_rays(
     rays,
     near_bound=2.0,
     far_bound=6.0,
-    num_samples=64,
+    num_samples=256,
     batch_size=10000,
     random_number_generator=None,
 ):
