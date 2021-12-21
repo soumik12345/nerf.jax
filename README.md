@@ -1,5 +1,7 @@
 # NeRF
 
+<a href="https://colab.research.google.com/github/soumik12345/nerf.jax/blob/main/notebooks/nerf_demo.ipynb" target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg\" alt="Open In Colab"/></a>
+
 Minimal Jax implementation of [NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis](https://arxiv.org/abs/2003.08934).
 
 ## Result of Tiny-NeRF
